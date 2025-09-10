@@ -1,25 +1,30 @@
-import { Entity, PrimaryGeneratedColumn, Column, OneToOne } from "typeorm"
-import { Doctor } from "./Doctor"
-import { Patient } from "./Patient"
+import { Entity, PrimaryGeneratedColumn, Column, OneToOne } from "typeorm";
+import { Doctor } from "./Doctor";
+import { Patient } from "./Patient";
 
 @Entity()
 export class User {
-  @PrimaryGeneratedColumn()
-  id: number
+  @PrimaryGeneratedColumn("uuid")
+  id: string;
 
   @Column()
-  name: string
+  name: string;
 
   @Column({ unique: true })
-  email: string
+  email: string;
 
-  @Column()
-  password: string
+  @Column({ type: "varchar", nullable: true })
+  password: string | null;
 
-  // Relationships
+  @Column({ default: "google" })
+  provider: string;
+
+  @Column({ type: "enum", enum: ["doctor", "patient"], default: "patient" })
+  role: "doctor" | "patient";
+
   @OneToOne(() => Doctor, doctor => doctor.user)
-  doctor: Doctor
+  doctor: Doctor;
 
   @OneToOne(() => Patient, patient => patient.user)
-  patient: Patient
+  patient: Patient;
 }
