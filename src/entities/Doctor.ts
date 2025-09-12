@@ -1,18 +1,18 @@
-import { Entity, PrimaryGeneratedColumn, Column, OneToOne, JoinColumn } from "typeorm"
-import { User } from "./User"
+import { Entity, PrimaryGeneratedColumn, Column, OneToOne, JoinColumn } from "typeorm";
+import { User } from "./User";
 
 @Entity()
 export class Doctor {
   @PrimaryGeneratedColumn()
-  id: number
+  id: number;
 
   @Column()
-  specialization: string
+  specialization: string;
 
   @Column()
-  experienceYears: number
+  experience: number;
 
-  @OneToOne(() => User, user => user.doctor)
-  @JoinColumn() // owner side of relation
-  user: User
+  @OneToOne(() => User, (user) => user.doctor, { onDelete: "CASCADE" })
+  @JoinColumn()
+  user: User;
 }
