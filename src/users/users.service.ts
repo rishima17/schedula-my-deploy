@@ -2,50 +2,32 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '../entities/User';
-import { Doctor } from '../entities/Doctor';
-import { Patient } from '../entities/Patient';
 
 @Injectable()
 export class UsersService {
   constructor(
-    @InjectRepository(User) private usersRepo: Repository<User>,
-    @InjectRepository(Doctor) private doctorsRepo: Repository<Doctor>,
-    @InjectRepository(Patient) private patientsRepo: Repository<Patient>,
+    @InjectRepository(User)
+    private userRepository: Repository<User>,
   ) {}
 
-  async findByEmail(email: string) {
-    return this.usersRepo.findOne({
-      where: { email },
-      relations: ['doctor', 'patient'],
-    });
+  async findByEmail(email: string): Promise<User | null> {
+    return this.userRepository.findOne({ where: { email } });
   }
 
-  async createUser(name: string, email: string, role: 'doctor' | 'patient') {
-    const user = this.usersRepo.create({
+  async createUser(
+    name: string,
+    email: string,
+    role: 'doctor' | 'patient',
+    password: string | null = null,
+    provider: string = 'google',
+  ): Promise<User> {
+    const user = this.userRepository.create({
       name,
       email,
       role,
-      provider: 'google',
-      password: null,
+      password,
+      provider,
     });
-    await this.usersRepo.save(user);
-
-    if (role === 'doctor') {
-      const doctor = this.doctorsRepo.create({
-        specialization: '',
-        experience: 0,
-        user,
-      });
-      await this.doctorsRepo.save(doctor);
-    } else {
-      const patient = this.patientsRepo.create({
-        age: 0,
-        medicalHistory: '',
-        user,
-      });
-      await this.patientsRepo.save(patient);
-    }
-
-    return this.findByEmail(email);
+    return this.userRepository.save(user);
   }
 }

@@ -1,28 +1,30 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, BadRequestException } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
-import { JwtService } from '@nestjs/jwt';
+import * as bcrypt from 'bcrypt';
+import { RegisterDto } from './dto/register.dto';
 import { User } from '../entities/User';
 
 @Injectable()
 export class AuthService {
-  constructor(
-    private usersService: UsersService,
-    private jwtService: JwtService,
-  ) {}
+  constructor(private usersService: UsersService) {}
 
-  // Called by GoogleStrategy: find or create user
-  async validateOAuthLogin(email: string, name: string, role: 'doctor' | 'patient') {
-    let user = await this.usersService.findByEmail(email);
-    if (!user) {
-      user = await this.usersService.createUser(name, email, role);
+  // -------------------- LOCAL REGISTRATION --------------------
+  async register(dto: RegisterDto): Promise<User> {
+    const existingUser = await this.usersService.findByEmail(dto.email);
+    if (existingUser) {
+      throw new BadRequestException('Email already exists');
     }
-    // optionally: you could update role if mismatched, but be careful with security
-    return user;
-  }
 
-  async login(user: User) {
-    const payload = { sub: user.id, email: user.email, role: user.role };
-    const access_token = this.jwtService.sign(payload);
-    return { access_token, user };
+    const hashedPassword = await bcrypt.hash(dto.password, 10);
+
+    const user = await this.usersService.createUser(
+      dto.name,
+      dto.email,
+      dto.role,
+      hashedPassword,
+      'local',
+    );
+
+    return user;
   }
 }
