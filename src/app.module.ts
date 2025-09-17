@@ -1,29 +1,50 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { AuthModule } from './auth/auth.module';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
+import { ConfigModule } from '@nestjs/config';
+
 import { User } from './entities/User';
-import { Doctor } from './entities/Doctor';
 import { Patient } from './entities/Patient';
+import { Doctor } from './entities/Doctor';
+import { OnboardingProgress } from './entities/onboarding-progress.entity';
+import { Appointment } from './entities/Appointment';
+import { Availability } from './entities/Availability'; // ✅ import it
+
+import { VerificationModule } from './verification/verification.module';
+import { OnboardingModule } from './onboarding/onboarding.module';
+import { AppointmentModule } from './appointments/appointment.module';
+import { DoctorModule } from './doctor/doctor.module';
+import { AuthModule } from './auth/auth.module';
+import { AvailabilityModule } from './availability/availability.module'; // ✅ import module
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+
     TypeOrmModule.forRoot({
       type: 'postgres',
-      host: process.env.DB_HOST || 'localhost',
-      port: parseInt(process.env.DB_PORT || '5432', 10),
-      username: process.env.DB_USER || 'postgres',
-      password: process.env.DB_PASS || 'root1234',
-      database: process.env.DB_NAME || 'PearlThoughts',
-      autoLoadEntities: true,   // automatically loads entities registered in feature modules
-      synchronize: true,        // ❌ only for dev; set to false in prod and use migrations
+      host: 'localhost',
+      port: 5432,
+      username:  'postgres',
+      password:  'root',
+      database: 'PearlThoughts',
+      entities: [
+        User,
+        Patient,
+        Doctor,
+        OnboardingProgress,
+        Appointment,
+        Availability, // ✅ add here
+      ],
+      synchronize: true, // ⚠️ remove in production
     }),
+
+    // Feature modules
     AuthModule,
+    VerificationModule,
+    OnboardingModule,
+    DoctorModule,
+    AppointmentModule,
+    AvailabilityModule, // ✅ register the new module
   ],
-  controllers: [AppController],
-  providers: [AppService],
 })
 export class AppModule {}
