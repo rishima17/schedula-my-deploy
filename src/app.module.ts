@@ -7,14 +7,14 @@ import { Patient } from './entities/Patient';
 import { Doctor } from './entities/Doctor';
 import { OnboardingProgress } from './entities/onboarding-progress.entity';
 import { Appointment } from './entities/Appointment';
-import { Availability } from './entities/Availability'; // ✅ import it
+import { Availability } from './entities/Availability';
 
 import { VerificationModule } from './verification/verification.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
 import { AppointmentModule } from './appointments/appointment.module';
 import { DoctorModule } from './doctor/doctor.module';
 import { AuthModule } from './auth/auth.module';
-import { AvailabilityModule } from './availability/availability.module'; // ✅ import module
+import { AvailabilityModule } from './availability/availability.module';
 
 @Module({
   imports: [
@@ -22,20 +22,19 @@ import { AvailabilityModule } from './availability/availability.module'; // ✅ 
 
     TypeOrmModule.forRoot({
       type: 'postgres',
-      host: 'localhost',
-      port: 5432,
-      username:  'postgres',
-      password:  'root',
-      database: 'PearlThoughts',
+      url: process.env.DATABASE_URL, // ✅ use Render’s env var
       entities: [
         User,
         Patient,
         Doctor,
         OnboardingProgress,
         Appointment,
-        Availability, // ✅ add here
+        Availability,
       ],
-      synchronize: true, // ⚠️ remove in production
+      synchronize: true, // ⚠️ safe for dev, but disable in prod
+      ssl: process.env.NODE_ENV === 'production'
+        ? { rejectUnauthorized: false }
+        : false, // ✅ important for Render Postgres
     }),
 
     // Feature modules
@@ -44,7 +43,7 @@ import { AvailabilityModule } from './availability/availability.module'; // ✅ 
     OnboardingModule,
     DoctorModule,
     AppointmentModule,
-    AvailabilityModule, // ✅ register the new module
+    AvailabilityModule,
   ],
 })
 export class AppModule {}
