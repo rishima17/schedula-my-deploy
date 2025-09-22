@@ -92,7 +92,7 @@ export class AppointmentService {
 
     const patient = await this.patientRepo.findOne({ where: { id: patientId } });
     if (!patient) throw new NotFoundException('Patient not found');
-    if (!patient.isVerified) throw new ConflictException('Patient must be verified');
+    
 
     const doctor = await this.doctorRepo.findOne({ where: { id: doctorId } });
     if (!doctor) throw new NotFoundException('Doctor not found');
