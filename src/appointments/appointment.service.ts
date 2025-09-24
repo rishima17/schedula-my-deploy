@@ -34,14 +34,11 @@ export class AppointmentService {
     const day = new Date(date);
     if (isNaN(day.getTime())) throw new BadRequestException('Invalid date format');
 
-    if (doctor.scheduleType === 'wave') {
-      return this.generateWaveSlots(doctor, day);
-    } else {
-      return this.getStreamSlots(doctor, day);
-    }
+    return this.generateFixedSlots(doctor, day);
   }
 
-  private async generateWaveSlots(doctor: Doctor, day: Date) {
+  // 🔹 Generate fixed 15-minute (slotDuration) slots
+  private async generateFixedSlots(doctor: Doctor, day: Date) {
     const slots: { time: string; available: number }[] = [];
     const [startHour, startMin] = doctor.consultingStart.split(':').map(Number);
     const [endHour, endMin] = doctor.consultingEnd.split(':').map(Number);
@@ -61,32 +58,11 @@ export class AppointmentService {
 
       slots.push({
         time: slotStart.toISOString(),
-        available: Math.max(0, doctor.capacityPerSlot - booked),
+        available: booked === 0 ? 1 : 0, // free or taken
       });
     }
 
     return slots;
-  }
-
-  private async getStreamSlots(doctor: Doctor, day: Date) {
-    const startOfDay = new Date(day);
-    startOfDay.setHours(0, 0, 0, 0);
-
-    const endOfDay = new Date(day);
-    endOfDay.setHours(23, 59, 59, 999);
-
-    const booked = await this.apptRepo.count({
-      where: {
-        doctorId: doctor.id,
-        slot: Between(startOfDay, endOfDay),
-        status: 'confirmed',
-      },
-    });
-
-    return {
-      date: day.toISOString().split('T')[0],
-      remainingCapacity: Math.max(0, doctor.dailyCapacity - booked),
-    };
   }
 
   async confirmAppointment(dto: CreateAppointmentDto) {
@@ -94,79 +70,33 @@ export class AppointmentService {
 
     const patient = await this.patientRepo.findOne({ where: { id: patientId } });
     if (!patient) throw new NotFoundException('Patient not found');
-    if (!patient.isVerified) throw new ConflictException('Patient must be verified');
 
     const doctor = await this.doctorRepo.findOne({ where: { id: doctorId } });
     if (!doctor) throw new NotFoundException('Doctor not found');
 
-    // 🔹 Wave scheduling: divide slot time equally among patients
-    if (doctor.scheduleType === 'wave') {
-      if (!slot) throw new BadRequestException('Slot is required for wave scheduling');
+    if (!slot) throw new BadRequestException('Slot is required');
 
-      const slotDate = new Date(slot);
-      slotDate.setSeconds(0, 0);
+    const slotDate = new Date(slot);
+    slotDate.setSeconds(0, 0);
 
-      const existingPatients = await this.apptRepo.find({
-        where: { doctorId, slot: slotDate, status: 'confirmed' },
-        order: { createdAt: 'ASC' },
-      });
-
-      if (existingPatients.length >= doctor.capacityPerSlot) {
-        throw new ConflictException('Slot capacity full');
-      }
-
-      // ✅ Calculate sub-slot duration for each patient
-      const subDuration = doctor.slotDuration / doctor.capacityPerSlot; // minutes
-      const patientIndex = existingPatients.length; // next patient position
-
-      const startTime = new Date(slotDate);
-      startTime.setMinutes(startTime.getMinutes() + patientIndex * subDuration);
-
-      const endTime = new Date(startTime);
-      endTime.setMinutes(endTime.getMinutes() + subDuration);
-
-      const appt = this.apptRepo.create({
-        patientId,
-        doctorId,
-        slot: slotDate, // overall wave slot
-        startTime,      // individual patient start time
-        endTime,        // individual patient end time
-        status: 'confirmed',
-      });
-
-      return await this.apptRepo.save(appt);
-    }
-
-    // 🔹 Stream scheduling: auto-assign next sequential slot
-    const today = new Date(slot || new Date());
-
-    const startOfDay = new Date(today);
-    startOfDay.setHours(0, 0, 0, 0);
-
-    const endOfDay = new Date(today);
-    endOfDay.setHours(23, 59, 59, 999);
-
-    const booked = await this.apptRepo.count({
-      where: {
-        doctorId,
-        slot: Between(startOfDay, endOfDay),
-        status: 'confirmed',
-      },
+    const alreadyBooked = await this.apptRepo.findOne({
+      where: { doctorId, slot: slotDate, status: 'confirmed' },
     });
 
-    if (booked >= doctor.dailyCapacity) {
-      throw new ConflictException('No capacity left for today');
+    if (alreadyBooked) {
+      throw new ConflictException('Slot already booked');
     }
 
-    const assignedSlot = new Date(today);
-    assignedSlot.setHours(parseInt(doctor.consultingStart.split(':')[0], 10), 0, 0, 0);
-    assignedSlot.setMinutes(assignedSlot.getMinutes() + booked * doctor.slotDuration);
-    assignedSlot.setSeconds(0, 0);
+    const endTime = new Date(slotDate);
+endTime.setMinutes(endTime.getMinutes() + doctor.slotDuration); // 15 mins
+
 
     const appt = this.apptRepo.create({
       patientId,
       doctorId,
-      slot: assignedSlot,
+      slot: slotDate,
+      startTime: slotDate,
+      endTime,
       status: 'confirmed',
     });
 

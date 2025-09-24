@@ -24,7 +24,7 @@ export class Doctor {
   consultingEnd: string; // e.g. "16:00"
 
   // Wave-specific
-  @Column({ type: 'int', default: 30 })
+  @Column({ type: 'int' })
   slotDuration: number; // in minutes (30, 60, etc.)
 
   @Column({ type: 'int', default: 1 })

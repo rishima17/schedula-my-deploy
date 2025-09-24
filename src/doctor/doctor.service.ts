@@ -56,7 +56,7 @@ export class DoctorService {
     const slots: string[] = [];
     const startTime = doctor.consultingStart || '09:00:00';
     const endTime = doctor.consultingEnd || '16:00:00';
-    const slotDuration = doctor.slotDuration || 30;
+    const slotDuration = doctor.slotDuration || 15;
 
     if (doctor.scheduleType === 'wave') {
       let current = new Date(`${date}T${startTime}`);

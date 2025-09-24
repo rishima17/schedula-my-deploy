@@ -44,7 +44,7 @@ export class UsersService {
         scheduleType: doctorData?.scheduleType ?? 'wave',
         consultingStart: doctorData?.consultingStart ?? '09:00',
         consultingEnd: doctorData?.consultingEnd ?? '16:00',
-        slotDuration: doctorData?.slotDuration ?? 30,
+        slotDuration: doctorData?.slotDuration ?? 15,
         capacityPerSlot: doctorData?.capacityPerSlot ?? 1,
         dailyCapacity: doctorData?.dailyCapacity ?? 20,
       });

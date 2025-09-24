@@ -19,7 +19,7 @@ startTime: string;
   @Column({ type: 'time',nullable:true })
   endTime: string; // 'HH:MM'
 
-  @Column({ default: 30 })
+  @Column({ default: 15 })
   waveDuration: number; // in minutes
 
   @Column({ default: 1 })
