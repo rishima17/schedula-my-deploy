@@ -1,27 +1,35 @@
 import { Controller, Post, Body, Get, Param, Query } from '@nestjs/common';
 import { AvailabilityService } from './availability.service';
-import { AvailabilityDto } from './dto/availabilty.dto';
 
 @Controller('api/v1/availability')
 export class AvailabilityController {
   constructor(private readonly availabilityService: AvailabilityService) {}
 
+  // List all availability for a doctor
   @Get('doctor/:doctorId')
   listDoctorAvailability(@Param('doctorId') doctorId: number) {
     return this.availabilityService.findByDoctor(+doctorId);
   }
 
+  // Create a new availability slot
   @Post('create')
   createAvailability(@Body() data: any) {
     return this.availabilityService.create(data);
   }
 
+  // Expand availability to a merged slot
   @Post('expand')
-expandAvailability(@Body() dto: AvailabilityDto) {
+async expandAvailability(@Body() dto: {
+  doctorId: number;
+  date: string;
+  newEndTime: string;
+  waveDuration: number;
+  waveSize: number;
+}) {
   return this.availabilityService.expandAvailability(dto);
 }
 
-
+  // Get available slots for booking
   @Get('slots')
   getAvailableSlots(@Query('doctorId') doctorId: number, @Query('date') date: string) {
     return this.availabilityService.getAvailableSlots(+doctorId, date);
