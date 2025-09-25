@@ -6,27 +6,35 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between, MoreThanOrEqual } from 'typeorm';
-import { Appointment } from "../entities/Appointment";
+import { Appointment } from '../entities/Appointment';
 import { Patient } from '../entities/Patient';
 import { Doctor } from '../entities/Doctor';
+import { Availability } from '../entities/Availability';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { CancelAppointmentDto } from './dto/cancel-appointment.dto';
+import { format } from 'date-fns';
 
 @Injectable()
 export class AppointmentService {
   constructor(
     @InjectRepository(Appointment)
     private readonly apptRepo: Repository<Appointment>,
+
     @InjectRepository(Patient)
     private readonly patientRepo: Repository<Patient>,
+
     @InjectRepository(Doctor)
     private readonly doctorRepo: Repository<Doctor>,
+
+    @InjectRepository(Availability)
+    private readonly availabilityRepo: Repository<Availability>,
   ) {}
 
   async listDoctors() {
     return this.doctorRepo.find();
   }
 
+  // Get available slots
   async getAvailableSlots(doctorId: number, date: string) {
     const doctor = await this.doctorRepo.findOne({ where: { id: doctorId } });
     if (!doctor) throw new NotFoundException('Doctor not found');
@@ -34,10 +42,54 @@ export class AppointmentService {
     const day = new Date(date);
     if (isNaN(day.getTime())) throw new BadRequestException('Invalid date format');
 
+    // Check availability table first
+    const availabilities = await this.availabilityRepo.find({
+      where: { doctor: { id: doctorId }, day: date, status: 'free' },
+      order: { startTime: 'ASC' },
+    });
+
+    if (availabilities.length > 0) {
+      return this.generateSlotsFromAvailability(doctor, availabilities);
+    }
+
+    // fallback → doctor's default consulting hours
     return this.generateFixedSlots(doctor, day);
   }
 
-  // 🔹 Generate fixed 15-minute (slotDuration) slots
+  // Generate slots from Availability entity
+  private async generateSlotsFromAvailability(
+    doctor: Doctor,
+    availabilities: Availability[],
+  ) {
+    const slots: { time: string; available: number }[] = [];
+
+    for (const availability of availabilities) {
+      const start = new Date(`${availability.day}T${availability.startTime}`);
+      const end = new Date(`${availability.day}T${availability.endTime}`);
+
+      for (
+        let t = new Date(start);
+        t < end;
+        t.setMinutes(t.getMinutes() + availability.waveDuration)
+      ) {
+        const slotStart = new Date(t);
+        slotStart.setSeconds(0, 0);
+
+        const booked = await this.apptRepo.count({
+          where: { doctorId: doctor.id, slot: slotStart, status: 'confirmed' },
+        });
+
+        slots.push({
+          time: format(slotStart, "yyyy-MM-dd'T'HH:mm:ss"), // IST-friendly
+          available: booked < availability.capacity ? 1 : 0,
+        });
+      }
+    }
+
+    return slots;
+  }
+
+  // Fallback slots when no Availability exists
   private async generateFixedSlots(doctor: Doctor, day: Date) {
     const slots: { time: string; available: number }[] = [];
     const [startHour, startMin] = doctor.consultingStart.split(':').map(Number);
@@ -48,7 +100,11 @@ export class AppointmentService {
     const end = new Date(day);
     end.setHours(endHour, endMin, 0, 0);
 
-    for (let t = new Date(start); t < end; t.setMinutes(t.getMinutes() + doctor.slotDuration)) {
+    for (
+      let t = new Date(start);
+      t < end;
+      t.setMinutes(t.getMinutes() + doctor.slotDuration)
+    ) {
       const slotStart = new Date(t);
       slotStart.setSeconds(0, 0);
 
@@ -57,8 +113,8 @@ export class AppointmentService {
       });
 
       slots.push({
-        time: slotStart.toISOString(),
-        available: booked === 0 ? 1 : 0, // free or taken
+        time: format(slotStart, "yyyy-MM-dd'T'HH:mm:ss"), // IST format
+        available: booked === 0 ? 1 : 0, // free if not booked
       });
     }
 
@@ -88,8 +144,7 @@ export class AppointmentService {
     }
 
     const endTime = new Date(slotDate);
-endTime.setMinutes(endTime.getMinutes() + doctor.slotDuration); // 15 mins
-
+    endTime.setMinutes(endTime.getMinutes() + doctor.slotDuration);
 
     const appt = this.apptRepo.create({
       patientId,
@@ -127,7 +182,6 @@ endTime.setMinutes(endTime.getMinutes() + doctor.slotDuration); // 15 mins
     return await this.apptRepo.save(appt);
   }
 
-  // 🔹 Get upcoming appointments for a doctor
   async getUpcomingAppointmentsByDoctor(
     doctorId: number,
     date?: string,
