@@ -1,13 +1,15 @@
-import { 
-  Injectable, 
-  NotFoundException, 
-  ConflictException 
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Availability } from '../entities/Availability';
 import { Doctor } from '../entities/Doctor';
-import { addMinutes, format } from 'date-fns';
+import { AvailabilityDto } from './dto/availabilty.dto';
+import { format, addMinutes } from 'date-fns';
 
 @Injectable()
 export class AvailabilityService {
@@ -19,37 +21,57 @@ export class AvailabilityService {
     private doctorRepo: Repository<Doctor>,
   ) {}
 
-  // ✅ Create a new availability slot/wave
-  async create(data: Partial<Availability>) {
-    const doctor = await this.doctorRepo.findOne({ where: { id: data.doctor?.id } });
-    if (!doctor) {
-      throw new NotFoundException('Doctor not found');
+  // Fetch all available slots for a doctor on a specific day
+  async getAvailableSlots(doctorId: number, date: string) {
+    const doctor = await this.doctorRepo.findOne({ where: { id: doctorId } });
+    if (!doctor) throw new NotFoundException('Doctor not found');
+
+    const availabilities = await this.availabilityRepo.find({
+      where: { doctor: { id: doctorId }, day: date, status: 'free' },
+      order: { startTime: 'ASC' },
+    });
+
+    const slots: { time: string; available: number }[] = [];
+
+    for (const avail of availabilities) {
+      // Treat start/end as UTC (append Z)
+      const startUTC = new Date(`${avail.day}T${avail.startTime}Z`);
+      const endUTC = new Date(`${avail.day}T${avail.endTime}Z`);
+
+      let current = new Date(startUTC);
+
+      while (current < endUTC) {
+        slots.push({
+          time: format(current, "yyyy-MM-dd'T'HH:mm:ss'Z'"), // return in UTC
+          available: avail.capacity || 1,
+        });
+        current = addMinutes(current, avail.waveDuration);
+      }
     }
 
-    // Validation: doctor can create availability only once per day
-    const existingAvailability = await this.availabilityRepo.findOne({
+    return slots;
+  }
+
+  // Create new availability
+  async create(data: Partial<Availability>) {
+    if (!data.day || !data.startTime || !data.endTime) {
+      throw new BadRequestException('Missing required fields');
+    }
+
+    const doctor = await this.doctorRepo.findOne({ where: { id: data.doctor?.id } });
+    if (!doctor) throw new NotFoundException('Doctor not found');
+
+    const existing = await this.availabilityRepo.findOne({
       where: { doctor: { id: doctor.id }, day: data.day },
     });
 
-    if (existingAvailability) {
-      throw new ConflictException(
-        'Doctor already created availability for this day. Please expand instead.',
-      );
-    }
+    if (existing) throw new ConflictException('Availability already exists for this day');
 
-    // 🔹 Update doctor consulting timings with availability timings
-    doctor.consultingStart = data.startTime || doctor.consultingStart;
-    doctor.consultingEnd = data.endTime || doctor.consultingEnd;
-    doctor.slotDuration = data.waveDuration || doctor.slotDuration;
-    doctor.capacityPerSlot = data.capacity || doctor.capacityPerSlot;
-    await this.doctorRepo.save(doctor);
-
-    // 🔹 Save availability slot
     const availability = this.availabilityRepo.create({ ...data, doctor });
     return this.availabilityRepo.save(availability);
   }
 
-  // ✅ Get all availability for a doctor
+  // Get all availability for a doctor
   findByDoctor(doctorId: number) {
     return this.availabilityRepo.find({
       where: { doctor: { id: doctorId } },
@@ -57,55 +79,7 @@ export class AvailabilityService {
     });
   }
 
-  // ✅ Get all free slots/waves for a doctor on a specific day
-  async getAvailableSlots(doctorId: number, date: string) {
-    const doctor = await this.doctorRepo.findOne({
-      where: { id: doctorId },
-      relations: ['user'],
-    });
-
-    if (!doctor) {
-      throw new NotFoundException('Doctor not found');
-    }
-
-    // ✅ Prefer availability table
-    const availability = await this.availabilityRepo.find({
-      where: { doctor: { id: doctorId }, day: date, status: 'free' },
-      order: { startTime: 'ASC' },
-    });
-
-    let slots: string[] = [];
-
-    if (availability.length) {
-      slots = availability.map(slot => slot.startTime);
-    } else {
-      // ✅ fallback: use doctor’s updated consulting timings
-      const startTime = doctor.consultingStart || '09:00:00';
-      const endTime = doctor.consultingEnd || '12:00:00';
-      const slotDuration = doctor.slotDuration || 15;
-
-      if (doctor.scheduleType === 'wave') {
-        let current = new Date(`${date}T${startTime}`);
-        const end = new Date(`${date}T${endTime}`);
-
-        while (current < end) {
-          slots.push(format(current, 'HH:mm'));
-          current = addMinutes(current, slotDuration);
-        }
-      } else if (doctor.scheduleType === 'stream') {
-        slots.push(`${startTime} - ${endTime}`);
-      }
-    }
-
-    return {
-      doctorId,
-      doctorName: doctor.user?.name || 'Unknown',
-      date,
-      slots,
-    };
-  }
-
-  // ✅ Expand availability by merging existing waves
+  // Expand availability (merge multiple waves into one block)
   async expandAvailability(dto: {
     doctorId: number;
     date: string;
@@ -116,28 +90,28 @@ export class AvailabilityService {
     const { doctorId, date, newEndTime, waveDuration, waveSize } = dto;
 
     const doctor = await this.doctorRepo.findOne({ where: { id: doctorId } });
-    if (!doctor) {
-      throw new NotFoundException('Doctor not found');
-    }
+    if (!doctor) throw new NotFoundException('Doctor not found');
 
-    const existingWaves = await this.availabilityRepo.find({
+    const existing = await this.availabilityRepo.find({
       where: { doctor: { id: doctorId }, day: date },
       order: { startTime: 'ASC' },
     });
 
-    if (!existingWaves.length) {
-      throw new ConflictException('No existing waves found. Please create availability first.');
-    }
+    if (!existing.length) throw new ConflictException('No existing availability to expand');
 
-    const firstWave = existingWaves[0];
+    const firstWave = existing[0];
 
-    // 🔹 Merge and also update doctor timings
+    // Update doctor preferences
     doctor.consultingEnd = newEndTime;
     doctor.slotDuration = waveDuration || doctor.slotDuration;
     doctor.capacityPerSlot = waveSize || doctor.capacityPerSlot;
     await this.doctorRepo.save(doctor);
 
-    const mergedAvailability = this.availabilityRepo.create({
+    // Delete old waves
+    await this.availabilityRepo.delete(existing.map(w => w.id));
+
+    // Create merged availability block
+    const merged = this.availabilityRepo.create({
       doctor,
       day: date,
       startTime: firstWave.startTime,
@@ -147,7 +121,55 @@ export class AvailabilityService {
       status: 'free',
     });
 
-    await this.availabilityRepo.delete(existingWaves.map(w => w.id));
-    return this.availabilityRepo.save(mergedAvailability);
+    return this.availabilityRepo.save(merged);
+  }
+
+  // Shrink availability into one block (not multiple DB rows anymore)
+ async shrinkAvailability(dto: AvailabilityDto) {
+  const { doctorId, date, startTime, endTime, waveDuration, waveSize } = dto;
+
+  if (!doctorId || !date || !startTime || !endTime || !waveDuration || !waveSize) {
+    throw new BadRequestException('Missing required fields for shrinking');
+  }
+
+  const doctor = await this.doctorRepo.findOne({ where: { id: doctorId } });
+  if (!doctor) throw new NotFoundException('Doctor not found');
+
+  // Delete old availability
+  await this.availabilityRepo.delete({ doctor: { id: doctorId }, day: date });
+
+  // Update doctor entity with new timings
+  doctor.consultingStart = startTime;
+  doctor.consultingEnd = endTime;
+  doctor.slotDuration = waveDuration;
+  doctor.capacityPerSlot = waveSize;
+  await this.doctorRepo.save(doctor);
+
+  // Create merged availability block
+  const merged = this.availabilityRepo.create({
+    doctor,
+    day: date,
+    startTime,
+    endTime,
+    waveDuration,
+    capacity: waveSize,
+    status: 'free',
+  });
+
+  return this.availabilityRepo.save(merged);
+}
+
+
+  // Just return raw availability records (for UI)
+  async getAvailableSlotsForDoctor(doctorId: number, date: string) {
+    const availabilities = await this.availabilityRepo.find({
+      where: { doctor: { id: doctorId }, day: date, status: 'free' },
+      order: { startTime: 'ASC' },
+    });
+
+    return availabilities.map(avail => ({
+      startTime: avail.startTime,
+      endTime: avail.endTime,
+    }));
   }
 }

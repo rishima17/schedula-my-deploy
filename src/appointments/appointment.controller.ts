@@ -19,11 +19,11 @@ export class AppointmentController {
   ) {
     return this.apptService.getAvailableSlots(+doctorId, date);
   }
+@Post('confirm')
+async confirmAppointment(@Body() dto: CreateAppointmentDto) {
+  return await this.apptService.confirmAppointment(dto);
+}
 
-  @Post('confirm')
-  confirmAppointment(@Body() dto: CreateAppointmentDto) {
-    return this.apptService.confirmAppointment(dto);
-  }
 
   @Get(':id')
   getAppointmentDetails(@Param('id') id: number) {

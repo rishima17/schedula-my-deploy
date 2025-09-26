@@ -5,14 +5,14 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, MoreThanOrEqual } from 'typeorm';
+import { Repository, LessThanOrEqual, MoreThan, Between } from 'typeorm';
 import { Appointment } from '../entities/Appointment';
 import { Patient } from '../entities/Patient';
 import { Doctor } from '../entities/Doctor';
 import { Availability } from '../entities/Availability';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { CancelAppointmentDto } from './dto/cancel-appointment.dto';
-import { format } from 'date-fns';
+import { format, addMinutes } from 'date-fns';
 
 @Injectable()
 export class AppointmentService {
@@ -34,129 +34,110 @@ export class AppointmentService {
     return this.doctorRepo.find();
   }
 
-  // Get available slots
+  // ✅ Get available slots for a doctor on a specific day
   async getAvailableSlots(doctorId: number, date: string) {
     const doctor = await this.doctorRepo.findOne({ where: { id: doctorId } });
     if (!doctor) throw new NotFoundException('Doctor not found');
 
-    const day = new Date(date);
-    if (isNaN(day.getTime())) throw new BadRequestException('Invalid date format');
-
-    // Check availability table first
     const availabilities = await this.availabilityRepo.find({
       where: { doctor: { id: doctorId }, day: date, status: 'free' },
       order: { startTime: 'ASC' },
     });
 
-    if (availabilities.length > 0) {
-      return this.generateSlotsFromAvailability(doctor, availabilities);
-    }
-
-    // fallback → doctor's default consulting hours
-    return this.generateFixedSlots(doctor, day);
-  }
-
-  // Generate slots from Availability entity
-  private async generateSlotsFromAvailability(
-    doctor: Doctor,
-    availabilities: Availability[],
-  ) {
     const slots: { time: string; available: number }[] = [];
 
-    for (const availability of availabilities) {
-      const start = new Date(`${availability.day}T${availability.startTime}`);
-      const end = new Date(`${availability.day}T${availability.endTime}`);
+    for (const avail of availabilities) {
+      const start = new Date(`${avail.day}T${avail.startTime}`);
+      const end = new Date(`${avail.day}T${avail.endTime}`);
+      let current = new Date(start);
 
-      for (
-        let t = new Date(start);
-        t < end;
-        t.setMinutes(t.getMinutes() + availability.waveDuration)
-      ) {
-        const slotStart = new Date(t);
+      while (current < end) {
+        const slotStart = new Date(current);
         slotStart.setSeconds(0, 0);
 
-        const booked = await this.apptRepo.count({
-          where: { doctorId: doctor.id, slot: slotStart, status: 'confirmed' },
+        // Count already booked appointments for this slot
+        const bookedCount = await this.apptRepo.count({
+          where: { doctorId, slot: slotStart, status: 'confirmed' },
         });
 
         slots.push({
-          time: format(slotStart, "yyyy-MM-dd'T'HH:mm:ss"), // IST-friendly
-          available: booked < availability.capacity ? 1 : 0,
+          time: format(slotStart, "yyyy-MM-dd'T'HH:mm:ss"),
+          available: bookedCount < avail.capacity ? 1 : 0,
         });
+
+        current = addMinutes(current, avail.waveDuration);
       }
     }
 
     return slots;
   }
 
-  // Fallback slots when no Availability exists
-  private async generateFixedSlots(doctor: Doctor, day: Date) {
-    const slots: { time: string; available: number }[] = [];
-    const [startHour, startMin] = doctor.consultingStart.split(':').map(Number);
-    const [endHour, endMin] = doctor.consultingEnd.split(':').map(Number);
-
-    const start = new Date(day);
-    start.setHours(startHour, startMin, 0, 0);
-    const end = new Date(day);
-    end.setHours(endHour, endMin, 0, 0);
-
-    for (
-      let t = new Date(start);
-      t < end;
-      t.setMinutes(t.getMinutes() + doctor.slotDuration)
-    ) {
-      const slotStart = new Date(t);
-      slotStart.setSeconds(0, 0);
-
-      const booked = await this.apptRepo.count({
-        where: { doctorId: doctor.id, slot: slotStart, status: 'confirmed' },
-      });
-
-      slots.push({
-        time: format(slotStart, "yyyy-MM-dd'T'HH:mm:ss"), // IST format
-        available: booked === 0 ? 1 : 0, // free if not booked
-      });
-    }
-
-    return slots;
-  }
-
+  // ✅ Confirm an appointment
   async confirmAppointment(dto: CreateAppointmentDto) {
-    const { patientId, doctorId, slot } = dto;
+  const { patientId, doctorId, slot } = dto;
 
-    const patient = await this.patientRepo.findOne({ where: { id: patientId } });
-    if (!patient) throw new NotFoundException('Patient not found');
+  // 1️⃣ Fetch patient and doctor
+  const patient = await this.patientRepo.findOne({ where: { id: patientId } });
+  if (!patient) throw new NotFoundException('Patient not found');
 
-    const doctor = await this.doctorRepo.findOne({ where: { id: doctorId } });
-    if (!doctor) throw new NotFoundException('Doctor not found');
+  const doctor = await this.doctorRepo.findOne({ where: { id: doctorId } });
+  if (!doctor) throw new NotFoundException('Doctor not found');
 
-    if (!slot) throw new BadRequestException('Slot is required');
+  if (!slot) throw new BadRequestException('Slot is required');
 
-    const slotDate = new Date(slot);
-    slotDate.setSeconds(0, 0);
+  const slotDate = new Date(slot);
+  slotDate.setSeconds(0, 0); // normalize seconds
 
-    const alreadyBooked = await this.apptRepo.findOne({
-      where: { doctorId, slot: slotDate, status: 'confirmed' },
-    });
+  // 2️⃣ Fetch all availability blocks for the day
+  const availabilities = await this.availabilityRepo.find({
+    where: {
+      doctor: { id: doctorId },
+      day: format(slotDate, 'yyyy-MM-dd'),
+      status: 'free',
+    },
+  });
 
-    if (alreadyBooked) {
-      throw new ConflictException('Slot already booked');
-    }
+  // 3️⃣ Find availability block that matches the slot
+  const availability = availabilities.find(avail => {
+    const availStart = new Date(`${avail.day}T${avail.startTime}`);
+    const availEnd = new Date(`${avail.day}T${avail.endTime}`);
 
-    const endTime = new Date(slotDate);
-    endTime.setMinutes(endTime.getMinutes() + doctor.slotDuration);
+    // Check if slot is within availability
+    if (slotDate < availStart || slotDate >= availEnd) return false;
 
-    const appt = this.apptRepo.create({
-      patientId,
-      doctorId,
-      slot: slotDate,
-      startTime: slotDate,
-      endTime,
-      status: 'confirmed',
-    });
+    // Check wave alignment
+    const diffMins = (slotDate.getTime() - availStart.getTime()) / (60 * 1000);
+    return diffMins % avail.waveDuration === 0;
+  });
 
-    return await this.apptRepo.save(appt);
+  if (!availability) {
+    throw new BadRequestException('Doctor is not available at this time');
   }
+
+  // 4️⃣ Check if slot is already fully booked
+  const bookedCount = await this.apptRepo.count({
+    where: { doctorId, slot: slotDate, status: 'confirmed' },
+  });
+
+  if (bookedCount >= availability.capacity) {
+    throw new ConflictException('Slot already booked');
+  }
+
+  // 5️⃣ Calculate appointment end time
+  const endTime = addMinutes(slotDate, availability.waveDuration);
+
+  // 6️⃣ Create and save appointment
+  const appt = this.apptRepo.create({
+    patientId,
+    doctorId,
+    slot: slotDate,
+    startTime: slotDate,
+    endTime,
+    status: 'confirmed',
+  });
+
+  return await this.apptRepo.save(appt);
+}
 
   async getAppointmentDetails(id: number) {
     const appt = await this.apptRepo.findOne({
@@ -192,7 +173,7 @@ export class AppointmentService {
 
     const where: any = {
       doctorId,
-      slot: MoreThanOrEqual(today),
+      slot: Between(today, new Date(today.getTime() + 365 * 24 * 60 * 60 * 1000)),
       status: 'confirmed',
     };
 
